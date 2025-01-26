@@ -71,18 +71,23 @@ func RecoveryMiddleware(cfg *config.Config) app.HandlerFunc {
 }
 
 // CORSMiddleware 安全的跨域配置
-func CORSMiddleware() app.HandlerFunc {
+func CORSMiddleware(corsConfig config.CORSConfig) app.HandlerFunc {
 	return cors.New(
 		cors.Config{
-			AllowOrigins:     []string{"https://prod-domain.com", "http://localhost:3000"}, // 精确端口
-			AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},          // 必须包含OPTIONS方法
-			AllowHeaders:     []string{"Content-Type", "Authorization", "X-Requested-With"},
-			ExposeHeaders:    []string{"Content-Length", "X-Custom-Header"},
-			AllowCredentials: true,
-			MaxAge:           12 * time.Hour,
-			AllowOriginFunc: func(origin string) bool { // 动态校验来源
-				return strings.HasPrefix(origin, "http://localhost") ||
-					strings.Contains(origin, ".dev.your-company.com")
+			AllowOrigins:     corsConfig.AllowOrigins,
+			AllowMethods:     corsConfig.AllowMethods,
+			AllowHeaders:     corsConfig.AllowHeaders,
+			ExposeHeaders:    corsConfig.ExposeHeaders,
+			AllowCredentials: corsConfig.AllowCredentials,
+			MaxAge:           corsConfig.MaxAge,
+			// 动态校验来源
+			AllowOriginFunc: func(origin string) bool {
+				for _, domain := range corsConfig.TrustedDomains {
+					if strings.Contains(origin, domain) {
+						return true
+					}
+				}
+				return false
 			},
 		},
 	)
