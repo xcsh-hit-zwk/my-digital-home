@@ -17,7 +17,7 @@ func main() {
 	)
 
 	// 注册路由
-	router.RegisterAPIs(h)
+	router.RegisterAPIs(h, cfg)
 
 	// 启动服务
 	h.Spin()
