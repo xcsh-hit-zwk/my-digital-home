@@ -9,23 +9,17 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 	"my-digital-home/pkg/common/config"
+	"my-digital-home/pkg/core/user/repository/dao"
 	"my-digital-home/pkg/web/model"
 	"regexp"
 	"time"
 	"unicode"
 )
 
-// 原生整接口定义
-type UserRepository interface {
-	IsUsernameExists(username string) (bool, error)
-	IsEmailExists(email string) (bool, error)
-	CreateUser(username, email, hashedPwd string) error
-	GetPasswordHash(username string) (string, uint, error)
-	UpdatePassword(userID uint, newPwdHash string) error
-}
+
 
 type UserHandler struct {
-	UserRepo  UserRepository // 使用具体接口
+	UserRepo  *dao.UserRepository // 使用具体接口
 	JWTSecret string
 }
 
