@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -33,6 +34,13 @@ type CORSConfig struct {
 	TrustedDomains   []string      `json:"trustedDomains"`
 }
 
+type JWTAuthConfig struct {
+	Secret         string        `json:"secret"`
+	ExpireDuration time.Duration `json:"expireDuration"`
+	Issuer         string        `json:"issuer"`
+	SigningMethod  string        `json:"signingMethod"`
+}
+
 type RateLimitConfig struct {
 	Rate     int           `json:"rate"`
 	Interval time.Duration `json:"interval"`
@@ -40,6 +48,7 @@ type RateLimitConfig struct {
 
 type MiddlewareConfig struct {
 	Security  SecurityConfig  `json:"security"`
+	JWT       JWTAuthConfig   `json:"jwt"`
 	Timeout   TimeoutConfig   `json:"timeout"`
 	CORS      CORSConfig      `json:"cors"`
 	RateLimit RateLimitConfig `json:"rateLimit"`
@@ -51,7 +60,6 @@ type Config struct {
 	Env        string           `json:"env"` // 环境标识
 }
 
-// 默认配置
 var defaultConfig = Config{
 	Server: ServerConfig{
 		Address: ":8080",
@@ -60,6 +68,12 @@ var defaultConfig = Config{
 		Security: SecurityConfig{
 			MaxBodySize:    10 << 20, // 10MB
 			AllowedMethods: []string{"GET", "POST", "PUT"},
+		},
+		JWT: JWTAuthConfig{ // JWT默认配置
+			Secret:         "dev-secret-change-me-in-production", // 开发环境默认密钥
+			ExpireDuration: 24 * time.Hour,
+			Issuer:         "my-digital-home",
+			SigningMethod:  "HS256",
 		},
 		Timeout: TimeoutConfig{
 			RequestTimeout: 15,
@@ -167,5 +181,56 @@ func loadFromEnv(config *Config) {
 		}
 	}
 
+	/****** JWT 配置 (新增部分) ******/
+	if v := os.Getenv("JWT_SECRET"); v != "" {
+		config.Middleware.JWT.Secret = v
+	}
+
+	if v := os.Getenv("JWT_EXPIRATION"); v != "" {
+		if duration, err := time.ParseDuration(v); err == nil {
+			config.Middleware.JWT.ExpireDuration = duration
+		} else {
+			hlog.Warnf("Invalid JWT_EXPIRATION format: %v", err)
+		}
+	}
+
+	if v := os.Getenv("JWT_ISSUER"); v != "" {
+		config.Middleware.JWT.Issuer = v
+	}
+
+	if v := os.Getenv("JWT_ALGORITHM"); v != "" {
+		// 清理输入算法字符串中的空格
+		algorithm := strings.ReplaceAll(v, " ", "")
+		algorithm = strings.ToLower(algorithm)
+
+		// 允许的算法列表
+		validAlgorithms := map[string]bool{
+			"hs256": true,
+			"hs384": true,
+			"hs512": true,
+		}
+
+		if validAlgorithms[algorithm] {
+			// 统一转换为大写（标准JWT算法应全大写）
+			config.Middleware.JWT.SigningMethod = strings.ToUpper(algorithm)
+		} else {
+			hlog.Warnf("Unsupported JWT algorithm: %s", v)
+		}
+	}
+
 	// ... 其他环境变量配置项
+}
+
+// 分割环境变量列表（支持逗号分隔的字符串）
+func splitEnvList(value string) []string {
+	if value == "" {
+		return nil
+	}
+	return strings.Split(value, ",")
+}
+
+// 转换字符串为布尔值
+func parseBool(value string) bool {
+	value = strings.ToLower(value)
+	return value == "true" || value == "1" || value == "yes"
 }

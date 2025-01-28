@@ -11,6 +11,7 @@ import (
 func RegisterAPIs(h *server.Hertz, cfg *config.Config) {
 	// 初始化Handler实例
 	healthHandler := handler.NewHealthCheckHandler()
+	userHandler := handler.NewUserHandler
 
 	// 注册全局中间件（按执行顺序）
 	h.Use(
@@ -28,11 +29,18 @@ func RegisterAPIs(h *server.Hertz, cfg *config.Config) {
 	// 基础接口组
 	h.GET("/health", healthHandler.AdvancedHealthCheck)
 
-	// 业务接口组（示范案例）
-	// apiGroup := h.Group("/api/v1")
+	// 业务接口组
+	apiGroup := h.Group("/api/v1")
 	{
-		// 示例写法：
-		// userHandler := handler.NewUserHandler()
-		// apiGroup.POST("/users", userHandler.CreateUser)
+		// 用户相关接口
+		userGroup := apiGroup.Group("/users")
+		{
+			userGroup.POST("/register", userHandler.Register)
+			userGroup.POST("/login", userHandler.Login)
+
+			// 需要身份认证的接口
+			userGroup.Use(middleware.JWTAuthMiddleware(cfg.JWT.Secret))
+			userGroup.PUT("/password", userHandler.ChangePassword)
+		}
 	}
 }
