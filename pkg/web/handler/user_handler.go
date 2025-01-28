@@ -3,24 +3,30 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/cloudwego/hertz/pkg/common/utils"
+	"github.com/golang-jwt/jwt/v5"
 	"golang.org/x/crypto/bcrypt"
 	"my-digital-home/pkg/common/config"
 	"my-digital-home/pkg/web/model"
 	"regexp"
+	"time"
+	"unicode"
 )
 
+// 原生整接口定义
+type UserRepository interface {
+	IsUsernameExists(username string) (bool, error)
+	IsEmailExists(email string) (bool, error)
+	CreateUser(username, email, hashedPwd string) error
+	GetPasswordHash(username string) (string, uint, error)
+	UpdatePassword(userID uint, newPwdHash string) error
+}
+
 type UserHandler struct {
-	// 依赖接口（实际项目需要通过DI注入）
-	UserRepo interface {
-		IsUsernameExists(username string) (bool, error)
-		IsEmailExists(email string) (bool, error)
-		CreateUser(username, email, hashedPwd string) error
-		GetPasswordHash(username string) (string, uint, error)
-		UpdatePassword(userID uint, newPwdHash string) error
-	}
-	JWTSecret string // JWT签名密钥
+	UserRepo  UserRepository // 使用具体接口
+	JWTSecret string
 }
 
 var (
@@ -30,7 +36,7 @@ var (
 func NewUserHandler(cfg *config.Config){
 	DefaultUserHandler = UserHandler{
 		UserRepo:   /* 注入实际的仓储实现 */,
-		JWTSecret: cfg.JWT.Secret,
+		JWTSecret: cfg.Middleware.JWT.Secret,
 	}
 	return
 }
@@ -45,9 +51,9 @@ func (h *UserHandler) Register(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	// 校验密码强度
-	if !passwordRegex.MatchString(req.Password) {
-		c.JSON(400, utils.H{"error": "密码需要数字、字母和特殊字符组合"})
+	// 使用新的密码验证方法
+	if err := validatePasswordStrength(req.Password); err != nil {
+		respondError(c, 400, err.Error())
 		return
 	}
 
@@ -99,11 +105,23 @@ func (h *UserHandler) Login(ctx context.Context, c *app.RequestContext) {
 		return
 	}
 
-	// TODO: 生成JWT Token（此处需补充具体实现）
-	token := "generated_jwt_token"
+	// 生成 JWT
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"user_id":  userID,
+		"username": req.Username,
+		"exp":      time.Now().Add(24 * time.Hour).Unix(), // 过期时间
+		"iss":      "my-digital-home",                      // 签发方
+	})
+
+	signedToken, err := token.SignedString([]byte(h.JWTSecret))
+	if err != nil {
+		c.JSON(500, utils.H{"error": "令牌生成失败"})
+		return
+	}
+
 
 	c.JSON(200, utils.H{
-		"token":    token,
+		"token":    signedToken,
 		"user_id":  userID,
 		"username": req.Username,
 	})
@@ -143,4 +161,41 @@ func (h *UserHandler) ChangePassword(ctx context.Context, c *app.RequestContext)
 	}
 
 	c.JSON(200, utils.H{"message": "密码已更新"})
+}
+
+func validatePasswordStrength(password string) error {
+	if len(password) < 8 {
+		return errors.New("密码至少8位")
+	}
+
+	hasNumber := false
+	hasLetter := false
+	hasSpecial := false
+
+	for _, c := range password {
+		switch {
+		case unicode.IsNumber(c):
+			hasNumber = true
+		case unicode.IsLetter(c):
+			hasLetter = true
+		case unicode.IsSymbol(c) || unicode.IsPunct(c):
+			hasSpecial = true
+		}
+	}
+
+	if !(hasNumber && hasLetter && hasSpecial) {
+		return errors.New("需包含数字、字母和特殊字符")
+	}
+
+	return nil
+}
+
+
+// 统一错误响应方法
+func respondError(c *app.RequestContext, code int, msg string) {
+	c.JSON(code, utils.H{
+		"error":   msg,
+		"code":    code,
+		"success": false,
+	})
 }
