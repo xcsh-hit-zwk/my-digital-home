@@ -1,12 +1,13 @@
 package dao
 
 import (
-	"database/sql"
 	"errors"
 	"fmt"
+	"my-digital-home/pkg/core/user/model"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+	"gorm.io/gorm"
 )
 
 var (
@@ -15,152 +16,140 @@ var (
 	ErrDatabaseInternal = errors.New("database internal error")
 )
 
-// 用户表结构建议 DDL
-/*
-CREATE TABLE users (
-    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    username VARCHAR(127) NOT NULL COLLATE utf8mb4_bin,
-    email VARCHAR(255) NOT NULL COLLATE utf8mb4_bin,
-    password_hash CHAR(60) NOT NULL, -- 适应bcrypt哈希长度
-    is_active BOOLEAN NOT NULL DEFAULT TRUE,
-    version INT NOT NULL DEFAULT 1,
-    created_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP(3),
-    updated_at TIMESTAMP(3) DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
-    UNIQUE INDEX idx_username (username),
-    UNIQUE INDEX idx_email (email)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
-*/
-
-// User 领域模型
-type User struct {
-	ID           uint      `db:"id"`
-	Username     string    `db:"username"`
-	Email        string    `db:"email"`
-	PasswordHash string    `db:"password_hash"`
-	IsActive     bool      `db:"is_active"`
-	Version      int       `db:"version"`
-	CreatedAt    time.Time `db:"created_at"`
-	UpdatedAt    time.Time `db:"updated_at"`
+type GormUserRepository struct {
+	db *gorm.DB
 }
 
-// MySQLUserRepository 具体实现
-type MySQLUserRepository struct {
-	db *sql.DB
+func NewGormUserRepository(db *gorm.DB) *GormUserRepository {
+	return &GormUserRepository{db: db.Model(&model.User{})}
 }
 
-func NewMySQLUserRepository(db *sql.DB) *MySQLUserRepository {
-	return &MySQLUserRepository{db: db}
-}
-
-func (r *MySQLUserRepository) IsUsernameExists(username string) (bool, error) {
-	const query = `SELECT EXISTS(SELECT 1 FROM users WHERE username = ? AND is_active = TRUE)`
-	var exists bool
-	err := r.db.QueryRow(query, username).Scan(&exists)
-
+// Check username existence with active status
+func (r *GormUserRepository) IsUsernameExists(username string) (bool, error) {
+	var count int64
+	err := r.db.Where("username = ? AND is_active = ?", username, true).
+		Count(&count).Error
 	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, nil
+		return false, fmt.Errorf("%w: failed to check username", wrapGormError(err))
+	}
+	return count > 0, nil
+}
+
+// Check email existence with active status
+func (r *GormUserRepository) IsEmailExists(email string) (bool, error) {
+	var count int64
+	err := r.db.Where("email = ? AND is_active = ?", email, true).Count(&count).Error
+	if err != nil {
+		return false, fmt.Errorf("%w: failed to check email", wrapGormError(err))
+	}
+	return count > 0, nil
+}
+
+// Create new user with transaction
+func (r *GormUserRepository) CreateUser(username, email, hashedPwd string) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		newUser := model.User{
+			Username:     username,
+			Email:        email,
+			PasswordHash: hashedPwd,
+			IsActive:     true,
+			Version:      1,
 		}
-		return false, fmt.Errorf("%w: check username failed", wrapMySQLError(err))
-	}
-	return exists, nil
-}
 
-func (r *MySQLUserRepository) IsEmailExists(email string) (bool, error) {
-	const query = `SELECT EXISTS(SELECT 1 FROM users WHERE email = ? AND is_active = TRUE)`
-	var exists bool
-	err := r.db.QueryRow(query, email).Scan(&exists)
-
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, nil
+		if err := tx.Create(&newUser).Error; err != nil {
+			if isDuplicateError(err) {
+				return ErrDuplicateEntry
+			}
+			return fmt.Errorf("%w: user creation failed", wrapGormError(err))
 		}
-		return false, fmt.Errorf("%w: check email failed", wrapMySQLError(err))
-	}
-	return exists, nil
+		return nil
+	})
 }
 
-func (r *MySQLUserRepository) CreateUser(username, email, hashedPwd string) error {
-	const query = `
-		INSERT INTO users (username, email, password_hash)
-		VALUES (?, ?, ?)
-	`
+// Get user credentials with Optimistic Lock check
+func (r *GormUserRepository) GetPasswordHash(username string) (string, uint, error) {
+	var user model.User
+	err := r.db.Select("password_hash", "id", "version").
+		Where("username = ? AND is_active = ?", username, true).
+		First(&user).Error
 
-	_, err := r.db.Exec(query, username, email, hashedPwd)
-	if err != nil {
-		if isDuplicateKeyError(err) {
-			return ErrDuplicateEntry
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return "", 0, ErrUserNotFound
+	case err != nil:
+		return "", 0, fmt.Errorf("%w: password lookup failed", wrapGormError(err))
+	default:
+		return user.PasswordHash, user.ID, nil
+	}
+}
+
+// Update password with version control
+func (r *GormUserRepository) UpdatePassword(userID uint, newPwdHash string) error {
+	tx := r.db.Begin()
+	defer func() {
+		if r := recover(); r != nil {
+			tx.Rollback()
 		}
-		return fmt.Errorf("%w: create user failed", wrapMySQLError(err))
-	}
-	return nil
-}
+	}()
 
-func (r *MySQLUserRepository) GetPasswordHash(username string) (string, uint, error) {
-	const query = `
-		SELECT password_hash, id
-		FROM users 
-		WHERE username = ? AND is_active = TRUE
-		LIMIT 1
-	`
-
-	var (
-		hash   string
-		userID uint
-	)
-	err := r.db.QueryRow(query, username).Scan(&hash, &userID)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return "", 0, ErrUserNotFound
-		}
-		return "", 0, fmt.Errorf("%w: get password hash failed", wrapMySQLError(err))
-	}
-	return hash, userID, nil
-}
-
-func (r *MySQLUserRepository) UpdatePassword(userID uint, newPwdHash string) error {
-	const query = `
-		UPDATE users 
-		SET 
-			password_hash = ?,
-			version = version + 1,
-			updated_at = CURRENT_TIMESTAMP(3)
-		WHERE 
-			id = ? AND is_active = TRUE
-	`
-
-	result, err := r.db.Exec(query, newPwdHash, userID)
-	if err != nil {
-		return fmt.Errorf("%w: update password failed", wrapMySQLError(err))
+	var currentVersion int
+	if err := tx.Select("version").
+		Where("id = ? AND is_active = ?", userID, true).
+		First(&currentVersion).Error; err != nil {
+		tx.Rollback()
+		return wrapGormError(err)
 	}
 
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
-		return ErrUserNotFound
-	}
-	return nil
-}
+	result := tx.Model(&model.User{}).
+		Where(gorm.Expr("id = ? AND version = ?", userID, currentVersion)).
+		Updates(map[string]interface{}{
+			"password_hash": newPwdHash,
+			"version":       currentVersion + 1,
+			"updated_at":    time.Now(),
+		})
 
-// 私有工具函数
-func isDuplicateKeyError(err error) bool {
-	if mysqlErr, ok := err.(*mysql.MySQLError); ok {
-		return mysqlErr.Number == 1062
+	if result.Error != nil {
+		tx.Rollback()
+		return fmt.Errorf("%w: password update failed", wrapGormError(result.Error))
 	}
-	return false
-}
 
-func wrapMySQLError(err error) error {
-	if errors.Is(err, sql.ErrNoRows) {
+	if result.RowsAffected == 0 {
+		tx.Rollback()
 		return ErrUserNotFound
 	}
 
-	if mysqlErr, ok := err.(*mysql.MySQLError); ok {
+	return tx.Commit().Error
+}
+
+// Error handling utils
+func isDuplicateError(err error) bool {
+	var mysqlErr *mysql.MySQLError
+	if errors.As(err, &mysqlErr) && mysqlErr.Number == 1062 {
+		return true
+	}
+	return errors.Is(err, gorm.ErrDuplicatedKey)
+}
+
+func wrapGormError(err error) error {
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return ErrUserNotFound
+	}
+
+	var mysqlErr *mysql.MySQLError
+	if errors.As(err, &mysqlErr) {
 		switch mysqlErr.Number {
-		case 1045: // 访问被拒绝
-		case 1146: // 表不存在
-		case 1213: // 死锁
-			return fmt.Errorf("%w: %v", ErrDatabaseInternal, mysqlErr)
+		case 1062:
+			return ErrDuplicateEntry
+		case 1048, 1044, 1146: // Common MySQL operation errors
+			return ErrDatabaseInternal
 		}
 	}
-	return err
+
+	if errors.Is(err, gorm.ErrInvalidDB) ||
+		errors.Is(err, gorm.ErrInvalidTransaction) ||
+		errors.Is(err, gorm.ErrUnsupportedRelation) {
+		return ErrDatabaseInternal
+	}
+
+	return err // Return original error if no specific mapping
 }
