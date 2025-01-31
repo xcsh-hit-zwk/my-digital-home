@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/cloudwego/hertz/pkg/common/hlog"
+	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 	"io/ioutil"
@@ -42,6 +43,7 @@ type JWTAuthConfig struct {
 	ExpireDuration time.Duration `json:"expireDuration"`
 	Issuer         string        `json:"issuer"`
 	SigningMethod  string        `json:"signingMethod"`
+	Realm          string        `json:"realm"` // JWT领域标识
 }
 
 type RateLimitConfig struct {

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"github.com/cloudwego/hertz/pkg/common/hlog"
 	"github.com/cloudwego/hertz/pkg/common/utils"
+	"github.com/golang-jwt/jwt/v5"
+	jwth "github.com/hertz-contrib/jwt"
 	"my-digital-home/pkg/common/config"
 	"regexp"
 	"runtime/debug"
@@ -13,8 +15,7 @@ import (
 	"time"
 
 	"github.com/cloudwego/hertz/pkg/app"
-	"github.com/hertz-contrib/cors" // 需要先执行 go get github.com/hertz-contrib/cors
-)
+	"github.com/hertz-contrib/cors"
 
 // LoggerMiddleware 结构化的请求日志记录
 func LoggerMiddleware() app.HandlerFunc {
@@ -215,6 +216,69 @@ func SecurityCheckMiddleware(maxBodySize int64) app.HandlerFunc {
 
 		ctx.Next(c)
 	}
+}
+
+// JWTAuthMiddleware 验证JWT令牌有效性
+func JWTAuthMiddleware(secret string) app.HandlerFunc {
+	authMiddleware, err := jwth.New(&jwth.Middleware{
+		SigningKey:  []byte(secret),
+		TokenLookup: "header:Authorization",
+		TimeFunc:    time.Now,
+	})
+	if err != nil {
+		panic(fmt.Sprintf("JWT 中间件初始化失败: %v", err))
+	}
+	return authMiddleware.MiddlewareFunc()
+}
+
+func InitJWTAuth(cfg *config.JWTAuthConfig) app.HandlerFunc {
+	authMiddleware := jwt.New(&jwt.HertzJWTMiddleware{
+		Realm:            cfg.Issuer,
+		SigningAlgorithm: cfg.SigningMethod,
+		Key:              []byte(cfg.Secret),
+		Timeout:          cfg.ExpireDuration,
+		TimeFunc:         time.Now,
+		Authenticator:    authenticator, // TODO: 实际用户验证逻辑
+		IdentityKey:      "user_id",
+		Unauthorized:     handleJWTError,
+	})
+
+	if err != nil {
+		hlog.Fatal("JWT Middleware init failed: %v", err)
+	}
+
+	return authMiddleware.MiddlewareFunc()
+}
+
+func authenticator(ctx context.Context, c *app.RequestContext) (interface{}, error) {
+	var loginReq struct {
+		Username string `form:"username" binding:"required"`
+		Password string `form:"password" binding:"required"`
+	}
+
+	if err := c.BindAndValidate(&loginReq); err != nil {
+		return nil, jwt.ErrMissingLoginValues
+	}
+
+	// 查询数据库验证用户，此处需要实际数据访问
+	// user, err := userRepository.FindByUsername(loginReq.Username)
+	if loginReq.Username != "admin" || loginReq.Password != "password" {
+		return nil, jwt.ErrFailedAuthentication
+	}
+
+	// 返回用户身份标识
+	return map[string]interface{}{
+		"user_id":  1,
+		"username": loginReq.Username,
+	}, nil
+}
+
+func handleJWTError(ctx context.Context, c *app.RequestContext, code int, message string) {
+	hlog.Errorf("JWT Error (code=%d) path=%s: %s", code, c.Path(), message)
+	c.JSON(code, utils.H{
+		"code":    code,
+		"message": message,
+	})
 }
 
 // 辅助方法：判断User-Agent合法性

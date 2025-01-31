@@ -18,7 +18,7 @@ func main() {
 	}
 
 	// 注入到DAO层
-	dao.NewGormUserRepository(db)
+	dao.NewUserRepository(db)
 
 	// 创建Hertz实例
 	h := server.Default(

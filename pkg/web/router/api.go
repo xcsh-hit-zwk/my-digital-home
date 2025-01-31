@@ -11,7 +11,7 @@ import (
 func RegisterAPIs(h *server.Hertz, cfg *config.Config) {
 	// 初始化Handler实例
 	healthHandler := handler.NewHealthCheckHandler()
-	userHandler := handler.NewUserHandler
+	userHandler := handler.NewUserHandler(cfg)
 
 	// 注册全局中间件（按执行顺序）
 	h.Use(

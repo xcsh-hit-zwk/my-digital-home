@@ -3,8 +3,9 @@ package dao
 import (
 	"errors"
 	"fmt"
-	"github.com/bytedance/gopkg/util/logger"
+	"gorm.io/gorm/clause"
 	"my-digital-home/pkg/core/user/model"
+	"my-digital-home/pkg/core/user/repository/dao"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
@@ -21,12 +22,30 @@ type GormUserRepository struct {
 	db *gorm.DB
 }
 
-var DefaultUserRepo *GormUserRepository
+// User查询方法实现（优化版本）
+func (r *GormUserRepository) QueryByID(id int64) (model.User, error) {
+	var user model.User
+	err := r.db.Select("id", "username", "email", "created_at", "updated_at", "version").
+		Where("id = ? AND is_active = ?", id, true).
+		First(&user).
+		Error
 
-func NewGormUserRepository(db *gorm.DB) {
-	logger.Info("init user db")
-	DefaultUserRepo = &GormUserRepository{db: db.Model(&model.User{})}
-	return
+	switch {
+	case errors.Is(err, gorm.ErrRecordNotFound):
+		return model.User{}, ErrUserNotFound
+	case err != nil:
+		return model.User{}, fmt.Errorf("%w: user query failed", wrapGormError(err))
+	default:
+		return user, nil
+	}
+}
+
+var DefaultUserRepo dao.UserRepository
+
+func NewUserRepository(db *gorm.DB) {
+	DefaultUserRepo = &GormUserRepository{
+		db: db.Model(&model.User{}),
+	}
 }
 
 // Check username existence with active status
@@ -51,17 +70,9 @@ func (r *GormUserRepository) IsEmailExists(email string) (bool, error) {
 }
 
 // Create new user with transaction
-func (r *GormUserRepository) CreateUser(username, email, hashedPwd string) error {
+func (r *GormUserRepository) CreateUser(user model.User) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
-		newUser := model.User{
-			Username:     username,
-			Email:        email,
-			PasswordHash: hashedPwd,
-			IsActive:     true,
-			Version:      1,
-		}
-
-		if err := tx.Create(&newUser).Error; err != nil {
+		if err := tx.Create(&user).Error; err != nil {
 			if isDuplicateError(err) {
 				return ErrDuplicateEntry
 			}
@@ -72,7 +83,7 @@ func (r *GormUserRepository) CreateUser(username, email, hashedPwd string) error
 }
 
 // Get user credentials with Optimistic Lock check
-func (r *GormUserRepository) GetPasswordHash(username string) (string, uint, error) {
+func (r *GormUserRepository) GetPasswordHash(username string) (string, int64, error) {
 	var user model.User
 	err := r.db.Select("password_hash", "id", "version").
 		Where("username = ? AND is_active = ?", username, true).
@@ -90,40 +101,31 @@ func (r *GormUserRepository) GetPasswordHash(username string) (string, uint, err
 
 // Update password with version control
 func (r *GormUserRepository) UpdatePassword(userID uint, newPwdHash string) error {
-	tx := r.db.Begin()
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		var user model.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND is_active = ?", userID, true).
+			First(&user).Error; err != nil {
+			return wrapGormError(err)
 		}
-	}()
 
-	var currentVersion int
-	if err := tx.Select("version").
-		Where("id = ? AND is_active = ?", userID, true).
-		First(&currentVersion).Error; err != nil {
-		tx.Rollback()
-		return wrapGormError(err)
-	}
+		result := tx.Model(&model.User{}).
+			Where("id = ? AND version = ?", userID, user.Version).
+			Updates(map[string]interface{}{
+				"password_hash": newPwdHash,
+				"version":       user.Version + 1,
+				"updated_at":    time.Now(),
+			})
 
-	result := tx.Model(&model.User{}).
-		Where(gorm.Expr("id = ? AND version = ?", userID, currentVersion)).
-		Updates(map[string]interface{}{
-			"password_hash": newPwdHash,
-			"version":       currentVersion + 1,
-			"updated_at":    time.Now(),
-		})
+		if result.Error != nil {
+			return fmt.Errorf("%w: password update failed", wrapGormError(result.Error))
+		}
 
-	if result.Error != nil {
-		tx.Rollback()
-		return fmt.Errorf("%w: password update failed", wrapGormError(result.Error))
-	}
-
-	if result.RowsAffected == 0 {
-		tx.Rollback()
-		return ErrUserNotFound
-	}
-
-	return tx.Commit().Error
+		if result.RowsAffected == 0 {
+			return ErrUserNotFound
+		}
+		return nil
+	})
 }
 
 // Error handling utils
