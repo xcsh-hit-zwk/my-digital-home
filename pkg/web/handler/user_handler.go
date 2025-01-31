@@ -14,7 +14,6 @@ import (
 	"my-digital-home/pkg/core/user/repository/dao"
 	dao2 "my-digital-home/pkg/core/user/repository/dao/impl"
 	"my-digital-home/pkg/web/model"
-	"regexp"
 	"time"
 	"unicode"
 )
@@ -38,9 +37,6 @@ func NewUserHandler(cfg *config.Config) UserHandler {
 
 	return *DefaultUserHandler
 }
-
-// 密码规则：同时包含数字、字母和特殊字符，最少8位
-var passwordRegex = regexp.MustCompile(`^(?=.*[0-9])(?=.*[a-zA-Z])(?=.*[\W_]).{8,}$`)
 
 // 注册接口优化
 func (h *UserHandler) Register(ctx context.Context, c *app.RequestContext) {
@@ -179,7 +175,7 @@ func (h *UserHandler) ChangePassword(ctx context.Context, c *app.RequestContext)
 	}
 
 	// 严格校验新密码复杂度
-	if !passwordRegex.MatchString(req.NewPassword) {
+	if err := validatePasswordStrength(req.NewPassword); err != nil {
 		respondError(c, 400, "新密码不符合复杂度要求")
 		return
 	}

@@ -6,9 +6,9 @@
     "host": "/var/run/mysqld/mysqld.sock",
     "useUnixSock": true,
     "port": 0,  // 使用socket时忽略端口配置
-    "username": "app_user",
-    "password": "StrongPassword123!",
-    "dbname": "production_db",
+    "username": "company_mac_remote",
+    "password": "T0pS3cret%212023",
+    "dbname": "v1",
     "minPoolSize": 20,
     "maxPoolSize": 100
   },

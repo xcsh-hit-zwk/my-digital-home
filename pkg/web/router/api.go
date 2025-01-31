@@ -39,7 +39,7 @@ func RegisterAPIs(h *server.Hertz, cfg *config.Config) {
 			userGroup.POST("/login", userHandler.Login)
 
 			// 需要身份认证的接口
-			userGroup.Use(middleware.JWTAuthMiddleware(cfg.JWT.Secret))
+			userGroup.Use(middleware.JWTAuthMiddleware(&cfg.Middleware.JWT))
 			userGroup.PUT("/password", userHandler.ChangePassword)
 		}
 	}

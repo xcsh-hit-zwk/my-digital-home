@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"github.com/cloudwego/hertz/pkg/common/hlog"
 	"github.com/cloudwego/hertz/pkg/common/utils"
-	"github.com/golang-jwt/jwt/v5"
 	jwth "github.com/hertz-contrib/jwt"
 	"my-digital-home/pkg/common/config"
 	"regexp"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/cloudwego/hertz/pkg/app"
 	"github.com/hertz-contrib/cors"
+)
 
 // LoggerMiddleware 结构化的请求日志记录
 func LoggerMiddleware() app.HandlerFunc {
@@ -218,21 +218,8 @@ func SecurityCheckMiddleware(maxBodySize int64) app.HandlerFunc {
 	}
 }
 
-// JWTAuthMiddleware 验证JWT令牌有效性
-func JWTAuthMiddleware(secret string) app.HandlerFunc {
-	authMiddleware, err := jwth.New(&jwth.Middleware{
-		SigningKey:  []byte(secret),
-		TokenLookup: "header:Authorization",
-		TimeFunc:    time.Now,
-	})
-	if err != nil {
-		panic(fmt.Sprintf("JWT 中间件初始化失败: %v", err))
-	}
-	return authMiddleware.MiddlewareFunc()
-}
-
-func InitJWTAuth(cfg *config.JWTAuthConfig) app.HandlerFunc {
-	authMiddleware := jwt.New(&jwt.HertzJWTMiddleware{
+func JWTAuthMiddleware(cfg *config.JWTAuthConfig) app.HandlerFunc {
+	authMiddleware, err := jwth.New(&jwth.HertzJWTMiddleware{
 		Realm:            cfg.Issuer,
 		SigningAlgorithm: cfg.SigningMethod,
 		Key:              []byte(cfg.Secret),
@@ -257,13 +244,13 @@ func authenticator(ctx context.Context, c *app.RequestContext) (interface{}, err
 	}
 
 	if err := c.BindAndValidate(&loginReq); err != nil {
-		return nil, jwt.ErrMissingLoginValues
+		return nil, jwth.ErrMissingLoginValues
 	}
 
 	// 查询数据库验证用户，此处需要实际数据访问
 	// user, err := userRepository.FindByUsername(loginReq.Username)
 	if loginReq.Username != "admin" || loginReq.Password != "password" {
-		return nil, jwt.ErrFailedAuthentication
+		return nil, jwth.ErrFailedAuthentication
 	}
 
 	// 返回用户身份标识

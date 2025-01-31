@@ -1,13 +1,18 @@
 package config
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	logger2 "github.com/bytedance/gopkg/util/logger"
 	"github.com/cloudwego/hertz/pkg/common/hlog"
+	mysql2 "github.com/go-sql-driver/mysql" // 显式引入MySQL驱动包
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 	"io/ioutil"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -136,7 +141,9 @@ func Load() *Config {
 
 	// 1. 尝试从配置文件加载
 	configPath := getConfigPath()
+	logger2.Infof("Config file path: %s", configPath)
 	if configPath != "" {
+		logger2.Infof("Loading config from file: %s", configPath)
 		if err := loadFromFile(&config, configPath); err != nil {
 			hlog.Warnf("Failed to load config file: %v", err)
 		}
@@ -182,6 +189,7 @@ func loadFromFile(config *Config, path string) error {
 
 // loadFromEnv 从环境变量加载配置
 func loadFromEnv(config *Config) {
+	logger2.Infof("Loading config from environment variables")
 	// 服务器配置
 	if v := os.Getenv("SERVER_ADDR"); v != "" {
 		config.Server.Address = v
@@ -306,26 +314,31 @@ func parseBool(value string) bool {
 }
 
 func (c *Config) InitDB() (*gorm.DB, error) {
-	var dsn string
-	charsetParam := "charset=utf8mb4&parseTime=True&loc=Local"
-
-	// 自动切换连接方式
-	if c.Database.UseUnixSock {
-		dsn = fmt.Sprintf("%s:%s@unix(%s)/%s?%s",
-			c.Database.Username,
-			c.Database.Password,
-			c.Database.Host, // 这里host存储的是socket路径
-			c.Database.DBName,
-			charsetParam)
-	} else {
-		dsn = fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?%s",
-			c.Database.Username,
-			c.Database.Password,
-			c.Database.Host,
-			c.Database.Port,
-			c.Database.DBName,
-			charsetParam)
+	// >>>>> 修复点1：先注册TLS配置 <<<<<
+	rootCertPool := x509.NewCertPool()
+	pem, _ := os.ReadFile("/path/to/ca-cert.pem")
+	if ok := rootCertPool.AppendCertsFromPEM(pem); !ok {
+		panic("Failed to load CA cert")
 	}
+
+	// 注册自定义TLS配置（必须在生成DSN前调用）
+	err := mysql2.RegisterTLSConfig("custom", &tls.Config{ // ✅ 此时能识别RegisterTLSConfig
+		RootCAs:    rootCertPool,
+		ServerName: "mysql-server", // 应与证书CN一致
+	})
+	if err != nil {
+		logger2.Errorf("Failed to register TLS config: %v", err)
+		return nil, err
+	}
+
+	// >>>>> 修复点2：修正DSN的tls参数指向自定义配置 <<<<<
+	encodedPassword := url.QueryEscape(c.Database.Password)
+	dsn := fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=utf8mb4&parseTime=True&loc=Local&tls=custom", // 注意tls=custom参数
+		c.Database.Username,
+		encodedPassword,
+		c.Database.Host,
+		c.Database.Port,
+		c.Database.DBName)
 
 	// 配置GORM日志级别
 	gormConfig := &gorm.Config{}
@@ -343,6 +356,7 @@ func (c *Config) InitDB() (*gorm.DB, error) {
 	// 初始化数据库连接
 	db, err := gorm.Open(mysql.Open(dsn), gormConfig)
 	if err != nil {
+		logger2.Infof("Failed to open database: %v, dsn: %s", err, dsn)
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 
