@@ -3,6 +3,7 @@ package dao
 import (
 	"errors"
 	"fmt"
+	"github.com/bytedance/gopkg/util/logger"
 	"my-digital-home/pkg/core/user/model"
 	"time"
 
@@ -20,8 +21,12 @@ type GormUserRepository struct {
 	db *gorm.DB
 }
 
-func NewGormUserRepository(db *gorm.DB) *GormUserRepository {
-	return &GormUserRepository{db: db.Model(&model.User{})}
+var DefaultUserRepo *GormUserRepository
+
+func NewGormUserRepository(db *gorm.DB) {
+	logger.Info("init user db")
+	DefaultUserRepo = &GormUserRepository{db: db.Model(&model.User{})}
+	return
 }
 
 // Check username existence with active status

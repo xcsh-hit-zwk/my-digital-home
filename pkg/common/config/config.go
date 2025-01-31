@@ -2,7 +2,10 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"github.com/cloudwego/hertz/pkg/common/hlog"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 	"io/ioutil"
 	"os"
 	"strconv"
@@ -54,8 +57,22 @@ type MiddlewareConfig struct {
 	RateLimit RateLimitConfig `json:"rateLimit"`
 }
 
+// 新增数据库配置类型
+type DatabaseConfig struct {
+	Host        string `json:"host"`        // 数据库主机地址
+	Port        int    `json:"port"`        // 数据库端口
+	Username    string `json:"username"`    // 数据库用户名
+	Password    string `json:"password"`    // 数据库密码
+	DBName      string `json:"dbname"`      // 数据库名称
+	UseUnixSock bool   `json:"useUnixSock"` // 是否使用Unix套接字连接
+	MinPoolSize int    `json:"minPoolSize"` // 连接池最小连接数
+	MaxPoolSize int    `json:"maxPoolSize"` // 连接池最大连接数
+	LogLevel    string `json:"logLevel"`    // GORM日志级别
+}
+
 type Config struct {
 	Server     ServerConfig     `json:"server"`
+	Database   DatabaseConfig   `json:"database"` // 新增数据库配置节点
 	Middleware MiddlewareConfig `json:"middleware"`
 	Env        string           `json:"env"` // 环境标识
 }
@@ -63,6 +80,17 @@ type Config struct {
 var defaultConfig = Config{
 	Server: ServerConfig{
 		Address: ":8080",
+	},
+	Database: DatabaseConfig{
+		Host:        "localhost",
+		Port:        3306,
+		Username:    "root",
+		Password:    "root",
+		DBName:      "app",
+		UseUnixSock: false,
+		MinPoolSize: 5,
+		MaxPoolSize: 50,
+		LogLevel:    "warn",
 	},
 	Middleware: MiddlewareConfig{
 		Security: SecurityConfig{
@@ -217,8 +245,48 @@ func loadFromEnv(config *Config) {
 			hlog.Warnf("Unsupported JWT algorithm: %s", v)
 		}
 	}
+	// 数据库配置
+	if v := os.Getenv("DB_HOST"); v != "" {
+		config.Database.Host = v
+	}
 
-	// ... 其他环境变量配置项
+	if v := os.Getenv("DB_PORT"); v != "" {
+		if port, err := strconv.Atoi(v); err == nil {
+			config.Database.Port = port
+		}
+	}
+
+	if v := os.Getenv("DB_USER"); v != "" {
+		config.Database.Username = v
+	}
+
+	if v := os.Getenv("DB_PASSWORD"); v != "" {
+		config.Database.Password = v
+	}
+
+	if v := os.Getenv("DB_NAME"); v != "" {
+		config.Database.DBName = v
+	}
+
+	if v := os.Getenv("DB_SOCKET"); v != "" {
+		config.Database.UseUnixSock = parseBool(v)
+	}
+
+	if v := os.Getenv("DB_MIN_POOL"); v != "" {
+		if size, err := strconv.Atoi(v); err == nil {
+			config.Database.MinPoolSize = size
+		}
+	}
+
+	if v := os.Getenv("DB_MAX_POOL"); v != "" {
+		if size, err := strconv.Atoi(v); err == nil {
+			config.Database.MaxPoolSize = size
+		}
+	}
+
+	if v := os.Getenv("DB_LOG_LEVEL"); v != "" {
+		config.Database.LogLevel = strings.ToLower(v)
+	}
 }
 
 // 分割环境变量列表（支持逗号分隔的字符串）
@@ -233,4 +301,58 @@ func splitEnvList(value string) []string {
 func parseBool(value string) bool {
 	value = strings.ToLower(value)
 	return value == "true" || value == "1" || value == "yes"
+}
+
+func (c *Config) InitDB() (*gorm.DB, error) {
+	var dsn string
+	charsetParam := "charset=utf8mb4&parseTime=True&loc=Local"
+
+	// 自动切换连接方式
+	if c.Database.UseUnixSock {
+		dsn = fmt.Sprintf("%s:%s@unix(%s)/%s?%s",
+			c.Database.Username,
+			c.Database.Password,
+			c.Database.Host, // 这里host存储的是socket路径
+			c.Database.DBName,
+			charsetParam)
+	} else {
+		dsn = fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?%s",
+			c.Database.Username,
+			c.Database.Password,
+			c.Database.Host,
+			c.Database.Port,
+			c.Database.DBName,
+			charsetParam)
+	}
+
+	// 配置GORM日志级别
+	gormConfig := &gorm.Config{}
+	switch c.Database.LogLevel {
+	case "silent":
+		gormConfig.Logger = logger.Default.LogMode(logger.Silent)
+	case "error":
+		gormConfig.Logger = logger.Default.LogMode(logger.Error)
+	case "warn":
+		gormConfig.Logger = logger.Default.LogMode(logger.Warn)
+	case "info":
+		gormConfig.Logger = logger.Default.LogMode(logger.Info)
+	}
+
+	// 初始化数据库连接
+	db, err := gorm.Open(mysql.Open(dsn), gormConfig)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+
+	// Connection pool settings
+	sqlDB, err := db.DB()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get database instance: %w", err)
+	}
+
+	// 设置连接池
+	sqlDB.SetMaxIdleConns(c.Database.MinPoolSize)
+	sqlDB.SetMaxOpenConns(c.Database.MaxPoolSize)
+
+	return db, nil
 }

@@ -2,10 +2,22 @@
   "server": {
     "address": ":8080"
   },
+  "database": {
+    "host": "47.96.130.12",
+    "port": 3306,
+    "username": "company_mac_remote",
+    "password": "T0pS3cret!2023",
+    "dbname": "v1",
+    "useUnixSock": false,
+    "minPoolSize": 5,
+    "maxPoolSize": 20,
+    "logLevel": "info"
+  },
   "middleware": {
     "security": {
       "maxBodySize": 10485760,
-      "allowedMethods": ["GET", "POST", "PUT"]
+      "allowedMethods": ["GET", "POST", "PUT"],
+      "allowedHosts": ["localhost:3000"]
     },
     "timeout": {
       "requestTimeout": 15
@@ -19,6 +31,12 @@
       "maxAge": 43200000000000,
       "trustedDomains": [".dev.your-company.com"]
     },
+    "jwt": {
+      "secret": "dev-secret-change-me-in-production",
+      "expireDuration": 86400000000000,
+      "issuer": "my-digital-home-dev",
+      "signingMethod": "HS256"
+    },
     "rateLimit": {
       "rate": 10,
       "interval": 1000000000
@@ -26,4 +44,3 @@
   },
   "env": "development"
 }
-

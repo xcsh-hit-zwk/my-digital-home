@@ -1,0 +1,44 @@
+{
+  "server": {
+    "address": ":8085"
+  },
+  "database": {
+    "host": "/var/run/mysqld/mysqld.sock",
+    "useUnixSock": true,
+    "port": 0,  // 使用socket时忽略端口配置
+    "username": "app_user",
+    "password": "StrongPassword123!",
+    "dbname": "production_db",
+    "minPoolSize": 20,
+    "maxPoolSize": 100
+  },
+  "middleware": {
+    "security": {
+      "maxBodySize": 20971520,
+      "allowedMethods": ["GET", "POST", "DELETE"]
+    },
+    "timeout": {
+      "requestTimeout": 8
+    },
+    "cors": {
+      "allowOrigins": ["https://your-domain.com"],
+      "allowMethods": ["GET", "POST"],
+      "allowHeaders": ["Authorization"],
+      "exposeHeaders": ["X-Request-ID"],
+      "allowCredentials": false,
+      "maxAge": 3600000000000,
+      "trustedDomains": ["*.your-company.com"]
+    },
+    "jwt": {
+      "secret": "${JWT_SECRET}", // 密钥通过KMS注入
+      "expireDuration": 14400000000000, // 4小时
+      "issuer": "prod-issuer",
+      "signingMethod": "HS512"
+    },
+    "rateLimit": {
+      "rate": 100,
+      "interval": 1000000000
+    }
+  },
+  "env": "production"
+}
